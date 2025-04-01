@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass
 from typing import Dict, Optional, Sequence, Tuple
-import pickle
+
 import numpy as np
 import sys
 from gello.agents.agent import Agent
@@ -226,9 +226,13 @@ class DiffusionAgent(Agent):
         ee_pos, ee_quat = p.getLinkState(self.dummy_robot, 6)[0], p.getLinkState(self.dummy_robot, 6)[1]
         ee_euler = p.getEulerFromQuaternion(ee_quat)
         obs_dict['state'] = np.array([ee_pos[0], ee_pos[1], ee_pos[2], ee_euler[0], ee_euler[1], ee_euler[2], obs_dict['gripper_position'][0]])
-        # print('gripper position true:', obs_dict['gripper_position'][0])
+        print('gripper position true:', obs_dict['gripper_position'][0])
+        
+
         #resize the image to 480x640x3 to 240x320x3
-        image = cv2.resize(obs_dict['wrist_rgb'], (1907, 1071))
+        image = cv2.resize(obs_dict['wrist_rgb'], (320, 240))
+
+    
         plt.imsave('image.png', image)
         #make image sharper
         image = image.transpose(2, 0, 1)
@@ -237,7 +241,8 @@ class DiffusionAgent(Agent):
         image = torch.from_numpy(image).float()/255.0
         image = image + 0.1*torch.randn_like(image)
         # exit()
-        image_2 = cv2.resize(obs_dict['base_rgb'], (1907, 1071))
+
+        image_2 = cv2.resize(obs_dict['base_rgb'], (320, 240))
         
         plt.imsave('image_2.png', image_2)
         image_2 = image_2.transpose(2, 0, 1)
@@ -268,17 +273,12 @@ class DiffusionAgent(Agent):
             
 
             obs_dict_1 = {
-                'image_1' :  image_out,
-                'image_2' :  image_out_1,
-                'joint_positions': state_out
+                'camera_1' :  image_out,
+                'camera_2' :  image_out_1,
+                'robot_eef_pose': state_out
             }
-            # obs_dict_1 = {
-            #     'camera_1' :  image_out,
-            #     'camera_2' :  image_out_1,
-            #     'robot_eef_pose': state_out
-            # }
             result = self.policy.predict_action(obs_dict_1)
-            # action: 15*7
+            
             # result = {
             #     'action': action,
             #     'action_pred': action_pred
@@ -294,7 +294,6 @@ class DiffusionAgent(Agent):
                     self.cur_joint_list.append(self.cur_joint_list_1[i])
                 
             #reverse the order of the joints
-
         if self.cur_index == len(self.cur_joint_list) - 2:
             self.last_image_obs = copy.deepcopy(image)
             self.last_image_obs_1 = copy.deepcopy(image_2)
@@ -306,29 +305,7 @@ class DiffusionAgent(Agent):
         ee_pose = [action_pred[0], action_pred[1], action_pred[2]] 
         ee_quat = p.getQuaternionFromEuler( action_pred[3:6])
         print('ee_pose:', ee_pose, 'ee_quat:', ee_quat)
-        width = 640  # 图像宽度
-        height = 480  # 图像高度
-        view_matrix = p.computeViewMatrix(
-            cameraEyePosition=[1.5, 0, 1.5],  # 相机位置
-            cameraTargetPosition=ee_pose,     # 看向末端执行器位置
-            cameraUpVector=[0, 0, 1]          # 上方向
-        )
-        proj_matrix = p.computeProjectionMatrixFOV(
-            fov=60, aspect=float(width)/height, nearVal=0.1, farVal=100.0
-        )
-        # 获取相机图像
-        _, _, rgb, depth, _ = p.getCameraImage(
-            width=width,
-            height=height,
-            viewMatrix=view_matrix,
-            projectionMatrix=proj_matrix,
-            renderer=p.ER_BULLET_HARDWARE_OPENGL  # 使用高质量渲染
-        )
-        # 提取 RGB 图像并转换为 numpy 数组
-        rgb_array = np.array(rgb, dtype=np.uint8).reshape((height, width, 4))[:, :, :3]  # 去掉 alpha 通道
-        # 保存图像到文件
-        cv2.imwrite('pybullet_image.png', cv2.cvtColor(rgb_array, cv2.COLOR_RGB2BGR))
-        print("saved")
+
         # ee_pose = [action_pred[0]*0.5 + obs_dict['state'][0]*0.5, action_pred[1]*0.5 + obs_dict['state'][1]*0.5, 0.095]
 
         dummy_joint_pos = p.calculateInverseKinematics(self.dummy_robot, 6, ee_pose , ee_quat,
@@ -376,40 +353,14 @@ class DiffusionAgent(Agent):
 
 if __name__ == "__main__":
     demo_agent = DiffusionAgent(port="/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT3M9NVB-if00-port0")
-    base_path = "/mnt/data-3/users/mengxinpan/bc_data_il/gello/0"
-    wrist_rgb_path = os.path.join(base_path, "images_1", "00000.png")
-    base_rgb_path = os.path.join(base_path, "images_2", "00000.png")
-    pkl_path = os.path.join(base_path, "00001.pkl")
-
-    wrist_rgb = cv2.imread(wrist_rgb_path)
-    base_rgb = cv2.imread(base_rgb_path)
-    if wrist_rgb is None or base_rgb is None:
-        raise FileNotFoundError("One or both images could not be loaded.")
-    
-    # OpenCV 读取的图像是 BGR 格式，转换为 RGB（如果需要）
-    wrist_rgb = cv2.cvtColor(wrist_rgb, cv2.COLOR_BGR2RGB)
-    base_rgb = cv2.cvtColor(base_rgb, cv2.COLOR_BGR2RGB)
-    with open(pkl_path, 'rb') as f:
-        pkl_data = pickle.load(f)
-        joint_positions = pkl_data["joint_positions"]
-        
     obs = {
-        "wrist_rgb": np.array(wrist_rgb),  # 形状 (H, W, 3)
-        "base_rgb": np.array(base_rgb),    # 形状 (H, W, 3)
-        "joint_positions": np.array(joint_positions[:6]),  # 取前 6 个关节
-        "gripper_position": np.array([joint_positions[6] if len(joint_positions) > 6 else 0])  # 夹爪位置
+        "image": np.zeros((1, 1,  3, 240, 320)),
+        "agent_pos": np.zeros((1, 4, 2)),
+        "joint_positions": np.array([0, 0, 0, 0, 0, 0, 0]),
+        # "joint_velocities": np.array([0, 0, 0, 0, 0, 0, 0]),
+        # "ee_pos_quat": np.zeros(7),
+        # "gripper_position": np.array([0]),
     }
-    # obs = {
-    #     # "wrist_rgb": np.zeros((1, 1,  3, 240, 320)),
-    #     # "base_rgb": np.zeros((1, 1,  3, 240, 320)),
-    #     "wrist_rgb": np.zeros((240, 320,3)),
-    #     "base_rgb": np.zeros((240, 320,3)),
-    #     # "agent_pos": np.zeros((1, 4, 2)),
-    #     "joint_positions": np.array([0, 0, 0, 0, 0, 0, 0]),
-    #     # "joint_velocities": np.array([0, 0, 0, 0, 0, 0, 0]),
-    #     # "ee_pos_quat": np.zeros(7),
-    #     "gripper_position": np.array([0]),
-    # }
 
     action = demo_agent.act(obs)
     print('Action:', action)
